@@ -1,25 +1,145 @@
-version: '3.9'
+version: "3.9"
+
 services:
+  #postgres:
+  #  image: postgres:14-alpine
+  #  container_name: pool-recommender-db
+  #  environment:
+  #    POSTGRES_DB: ${POSTGRES_DB}
+  #    POSTGRES_USER: ${POSTGRES_USER}
+  #    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #  ports:
+  #    - "5432:5432"
+  #  volumes:
+  #    - postgres_data:/var/lib/postgresql/data
+  #  healthcheck:
+  #    test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+  #    interval: 10s
+  #    retries: 5
+
+
+  minio:
+    image: minio/minio
+    container_name: pool-recommender-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      retries: 5
+
+  #fetch-noaa:
+  #  build:
+  #    context: .
+  #    dockerfile: Dockerfile.fetch-noaa
+  #  container_name: pool-recommender-fetch-noaa
+  #  volumes:
+  #    - .:/code
+  #  working_dir: /code
+  #  depends_on:
+  #    - minio
+
+
+  fetch-noaa:
+    image: pool-recommender-fetch
+    container_name: pool-recommender-fetch-noaa
+    volumes:
+      - .:/code
+    working_dir: /code
+    command: sh -c "python3 scripts/fetch_noaa_to_minio_parquet.py"
+    depends_on:
+      - minio
+
+  fetch-nyc-pools:
+    build:
+      context: .
+      dockerfile: Dockerfile.fetch-noaa  # or rename/create a Dockerfile.fetch-nyc
+    container_name: pool-recommender-fetch-nyc
+    volumes:
+      - .:/code
+    working_dir: /code
+    command: sh -c "/wait-for-it.sh minio:9000 -- python3 scripts/fetch_nyc_pools_to_minio_parquet.py"
+    depends_on:
+      - minio
+
+  #fetch-nyc-pools:
+  #  image: pool-recommender-fetch
+  #  container_name: pool-recommender-fetch-nyc-pools
+  #  volumes:
+  #    - .:/code
+  #  working_dir: /code
+  #  command: sh -c "python3 scripts/fetch_nyc_pools_to_minio_parquet.py"
+  #  depends_on:
+  #    - minio
+
+  airflow:
+    image: apache/airflow:2.7.2
+    container_name: pool-recommender-airflow
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__FERNET_KEY: "fernetkey123"
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    ports:
+      - "8080:8080"
+    command: webserver
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 10s
+      retries: 5
+    #depends_on:
+     # - postgres
+
+  mlflow:
+    build:
+      context: ./mlflow
+      dockerfile: Dockerfile
+    container_name: pool-recommender-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlflow:/mlflow
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 10s
+      retries: 5
+
   api:
     build: .
     container_name: pool-recommender-api
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "./wait-for-it.sh postgres:5432 -- uvicorn app.main:app --host 0.0.0.0 --port 8000"
     volumes:
       - .:/code
     ports:
       - "8000:8000"
     env_file:
       - .env
-  db:
-    image: postgres:14
-    container_name: pool-recommender-db
-    environment:
-      POSTGRES_USER: pooluser
-      POSTGRES_PASSWORD: poolpass
-      POSTGRES_DB: pooldb
-    ports:
-      - "5432:5432"
+    depends_on:
+      #- postgres
+      - minio
+      - mlflow
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      retries: 5
+
+  react:
+    image: node:20-alpine
+    container_name: pool-recommender-react
+    working_dir: /app
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./frontend:/app
+    ports:
+      - "3000:3000"
+    command: sh -c "npm install && npm start"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+      interval: 10s
+      retries: 5
+
 volumes:
   postgres_data:

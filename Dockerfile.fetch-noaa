@@ -1,0 +1,25 @@
+# Use Python 3.9 slim as base
+FROM python:3.9-slim
+
+# Install OpenJDK 17 and dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openjdk-17-jdk && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Set JAVA_HOME for Spark
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="$JAVA_HOME/bin:$PATH"
+
+# Set work directory
+WORKDIR /code
+COPY . /code
+
+# Install Python dependencies
+RUN pip install --no-cache-dir pyspark==3.5.2 boto3 requests python-dotenv pandas pyarrow
+
+# Make wait-for-it executable
+COPY wait-for-it.sh /wait-for-it.sh
+RUN chmod +x /wait-for-it.sh
+
+# Default command (example for NOAA fetch)
+CMD ["/wait-for-it.sh", "minio:9000", "--", "python", "scripts/fetch_noaa_to_minio_parquet.py"]

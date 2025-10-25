@@ -1,0 +1,14 @@
+FROM openjdk:17-jdk-slim
+
+WORKDIR /code
+
+COPY . /code
+
+RUN apt-get update && \
+    apt-get install -y python3-pip python3-dev curl && \
+    pip3 install pyspark boto3 requests python-dotenv pandas pyarrow
+
+COPY wait-for-it.sh /wait-for-it.sh
+RUN chmod +x /wait-for-it.sh
+
+CMD ["/wait-for-it.sh", "minio:9000", "--", "python3", "scripts/fetch_noaa_to_minio_parquet.py"]
